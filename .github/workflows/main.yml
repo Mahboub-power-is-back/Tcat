@@ -1,297 +1,50 @@
-name: Build TunnelCat Website Server Panel
+name: Deploy TunnelCat Panel
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - main
-      - master
+
+  workflow_dispatch:
 
 permissions:
   contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
 
 jobs:
   build:
-    name: Prepare TunnelCat PHP Server Panel
     runs-on: ubuntu-latest
-    timeout-minutes: 20
 
     steps:
 
-      # =====================================================
-      # 1. Checkout repository
-      # =====================================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # =====================================================
-      # 2. Show repository
-      # =====================================================
-      - name: Show repository files
-        shell: bash
-        run: |
-          set -Eeuo pipefail
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
 
-          echo "======================================"
-          echo "Repository"
-          echo "======================================"
-
-          pwd
-          ls -lah
-
-      # =====================================================
-      # 3. Find and extract Website Panel ZIP
-      # =====================================================
-      - name: Extract TunnelCat Website Panel
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-
-          echo "======================================"
-          echo "Finding TunnelCat Website Panel ZIP"
-          echo "======================================"
-
-          PANEL_ZIP=""
-
-          if [ -f "TunnelCat-Website-Server-Panel-v1.zip" ]; then
-            PANEL_ZIP="TunnelCat-Website-Server-Panel-v1.zip"
-          else
-            PANEL_ZIP=$(find . \
-              -maxdepth 2 \
-              -type f \
-              -iname "*TunnelCat*Panel*.zip" \
-              | head -n 1 || true)
-          fi
-
-          if [ -z "$PANEL_ZIP" ]; then
-            echo "ERROR: TunnelCat Website Panel ZIP not found."
-
-            echo
-            echo "ZIP files found:"
-            find . -type f -name "*.zip" -print
-
-            exit 1
-          fi
-
-          echo "Panel ZIP:"
-          echo "$PANEL_ZIP"
-
-          rm -rf panel-source
-          mkdir -p panel-source
-
-          unzip -q "$PANEL_ZIP" -d panel-source
-
-          echo
-          echo "======================================"
-          echo "Extracted panel"
-          echo "======================================"
-
-          find panel-source \
-            -maxdepth 5 \
-            -type f \
-            -print | head -200
-
-      # =====================================================
-      # 4. Locate PHP panel
-      # =====================================================
-      - name: Locate PHP panel
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-
-          echo "======================================"
-          echo "Locating PHP panel"
-          echo "======================================"
-
-          PANEL_DIR=""
-
-          # Preferred structure:
-          # public/index.php
-          while IFS= read -r index_file; do
-
-            candidate="$(dirname "$index_file")"
-
-            if [ -f "$candidate/index.php" ]; then
-              PANEL_DIR="$candidate"
-              break
-            fi
-
-          done < <(
-            find panel-source \
-              -type f \
-              -path "*/public/index.php"
-          )
-
-          # Fallback: find any index.php
-          if [ -z "$PANEL_DIR" ]; then
-
-            while IFS= read -r index_file; do
-
-              candidate="$(dirname "$index_file")"
-
-              if [ -f "$candidate/index.php" ]; then
-                PANEL_DIR="$candidate"
-                break
-              fi
-
-            done < <(
-              find panel-source \
-                -type f \
-                -name "index.php"
-            )
-
-          fi
-
-          if [ -z "$PANEL_DIR" ]; then
-            echo "ERROR: PHP panel could not be located."
-
-            echo
-            echo "PHP files:"
-            find panel-source \
-              -type f \
-              -name "*.php" \
-              -print
-
-            exit 1
-          fi
-
-          PANEL_DIR="$(cd "$PANEL_DIR" && pwd)"
-
-          echo "PHP panel directory:"
-          echo "$PANEL_DIR"
-
-          echo "PANEL_DIR=$PANEL_DIR" >> "$GITHUB_ENV"
-
-      # =====================================================
-      # 5. Setup PHP
-      # =====================================================
-      - name: Setup PHP
-        uses: shivammathur/setup-php@v2
+      - name: Upload TunnelCat panel
+        uses: actions/upload-pages-artifact@v3
         with:
-          php-version: "8.2"
-          extensions: mysqli,pdo,pdo_mysql
-          coverage: none
+          path: ./public
 
-      # =====================================================
-      # 6. Verify PHP files
-      # =====================================================
-      - name: Verify PHP panel
-        shell: bash
-        run: |
-          set -Eeuo pipefail
 
-          echo "======================================"
-          echo "Panel directory"
-          echo "======================================"
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
 
-          cd "$PANEL_DIR"
+    runs-on: ubuntu-latest
 
-          pwd
-          find . -maxdepth 4 -type f -print
+    needs: build
 
-          echo
-          echo "======================================"
-          echo "Checking PHP"
-          echo "======================================"
+    steps:
 
-          PHP_COUNT=0
-
-          while IFS= read -r -d '' file; do
-
-            echo "Checking: $file"
-
-            php -l "$file"
-
-            PHP_COUNT=$((PHP_COUNT + 1))
-
-          done < <(
-            find . \
-              -type f \
-              -name "*.php" \
-              -print0
-          )
-
-          if [ "$PHP_COUNT" -eq 0 ]; then
-            echo "ERROR: No PHP files found."
-            exit 1
-          fi
-
-          echo
-          echo "PHP files checked: $PHP_COUNT"
-
-      # =====================================================
-      # 7. Check important panel directories
-      # =====================================================
-      - name: Check panel structure
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-
-          cd "$PANEL_DIR"
-
-          echo "======================================"
-          echo "Panel structure"
-          echo "======================================"
-
-          for item in \
-            "config" \
-            "public" \
-            ".htaccess"
-          do
-
-            if [ -e "$item" ]; then
-              echo "FOUND: $item"
-            else
-              echo "OPTIONAL/MISSING: $item"
-            fi
-
-          done
-
-          echo
-          echo "Panel structure check completed."
-
-      # =====================================================
-      # 8. Create deployment package
-      # =====================================================
-      - name: Create deployment package
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-
-          rm -rf deploy
-          mkdir -p deploy
-
-          cp -a "$PANEL_DIR"/. deploy/
-
-          cd deploy
-
-          zip -qr ../TunnelCat-Website-Server-Panel.zip .
-
-          cd ..
-
-          echo "======================================"
-          echo "Deployment package"
-          echo "======================================"
-
-          ls -lh TunnelCat-Website-Server-Panel.zip
-
-      # =====================================================
-      # 9. Upload package
-      # =====================================================
-      - name: Upload panel package
-        uses: actions/upload-artifact@v4
-        with:
-          name: TunnelCat-Website-Server-Panel
-          path: TunnelCat-Website-Server-Panel.zip
-          if-no-files-found: error
-          retention-days: 30
-
-      # =====================================================
-      # 10. Success
-      # =====================================================
-      - name: Deployment package ready
-        shell: bash
-        run: |
-          echo "======================================"
-          echo "TUNNELCAT WEBSITE PANEL READY"
-          echo "======================================"
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
