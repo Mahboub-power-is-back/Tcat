@@ -1,0 +1,114 @@
+name: Deploy TunnelCat Server Panel
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy PHP Server Panel
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # =====================================================
+      # 1. Checkout
+      # =====================================================
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # =====================================================
+      # 2. Check PHP project
+      # =====================================================
+      - name: Verify panel files
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          echo "Checking TunnelCat panel..."
+
+          test -f public/index.php
+          test -f public/login.php
+          test -f public/api.php
+          test -f public/server.php
+          test -f public/install.php
+
+          test -f config/config.php
+          test -f config/auth.php
+          test -f config/db.php
+          test -f config/functions.php
+
+          test -f .htaccess
+
+          echo "Panel files: OK"
+
+      # =====================================================
+      # 3. Setup PHP
+      # =====================================================
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: mysqli, pdo, pdo_mysql
+          tools: composer
+          coverage: none
+
+      # =====================================================
+      # 4. PHP syntax check
+      # =====================================================
+      - name: PHP syntax check
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          echo "Checking PHP syntax..."
+
+          find . -type f -name "*.php" \
+            -not -path "./.git/*" \
+            -print0 |
+          while IFS= read -r -d '' file; do
+            echo "Checking: $file"
+            php -l "$file"
+          done
+
+          echo "PHP syntax: OK"
+
+      # =====================================================
+      # 5. Create deployment package
+      # =====================================================
+      - name: Create deployment ZIP
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          rm -rf deploy
+          mkdir -p deploy
+
+          cp -r public deploy/
+          cp -r config deploy/
+          cp -r data deploy/
+          cp .htaccess deploy/
+
+          cd deploy
+          zip -r ../tunnelcat-panel.zip .
+
+          cd ..
+
+          echo "Deployment package:"
+          ls -lh tunnelcat-panel.zip
+
+      # =====================================================
+      # 6. Upload deployment artifact
+      # =====================================================
+      - name: Upload panel package
+        uses: actions/upload-artifact@v4
+        with:
+          name: TunnelCat-Website-Server-Panel
+          path: tunnelcat-panel.zip
+          retention-days: 30
