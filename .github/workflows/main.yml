@@ -1,171 +1,540 @@
-name: Deploy TunnelCat Panel
+name: Validate TunnelCat Repository Panel
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - main
       - master
 
+  pull_request:
+
+  workflow_dispatch:
+
 permissions:
   contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages
-  cancel-in-progress: true
 
 jobs:
-  deploy:
-    name: Deploy TunnelCat Panel
-    runs-on: ubuntu-latest
+  php:
+    name: PHP Validation
+    runs-on: ubuntu-22.04
 
     steps:
 
       # =====================================================
-      # 1. Checkout repository
+      # 1. Checkout
       # =====================================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
       # =====================================================
-      # 2. Find and extract website ZIP
+      # 2. Setup PHP
       # =====================================================
-      - name: Extract TunnelCat website
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: sqlite3, pdo_sqlite, openssl
+          coverage: none
+
+      # =====================================================
+      # 3. Show PHP information
+      # =====================================================
+      - name: PHP information
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          php -v
+
+          echo
+          echo "PHP modules:"
+          php -m
+
+      # =====================================================
+      # 4. Check project structure
+      # =====================================================
+      - name: Verify project structure
         shell: bash
         run: |
           set -Eeuo pipefail
 
           echo "======================================"
-          echo "Repository contents"
+          echo "Repository"
           echo "======================================"
 
-          find . -maxdepth 3 -type f | sort
+          pwd
+          find . -maxdepth 4 -type f | sort
 
           echo
-          echo "======================================"
-          echo "Finding website ZIP"
-          echo "======================================"
+          echo "Checking required files..."
 
-          ZIP=""
+          test -f app/config.php
 
-          if [ -f "TunnelCat-Website-Server-Panel-v1.zip" ]; then
-            ZIP="TunnelCat-Website-Server-Panel-v1.zip"
-          elif [ -f "TunnelCat-GitHub-Complete.zip" ]; then
-            ZIP="TunnelCat-GitHub-Complete.zip"
-          else
-            ZIP=$(find . -maxdepth 1 -type f \
-              \( -iname "*website*.zip" -o -iname "*panel*.zip" -o -iname "*github*.zip" \) \
-              | head -n 1 || true)
-          fi
+          test -f public/index.php
+          test -f public/repo.php
 
-          if [ -z "$ZIP" ]; then
-            echo "ERROR: Website ZIP not found."
-            exit 1
-          fi
+          test -f public/admin/index.php
+          test -f public/admin/login.php
+          test -f public/admin/logout.php
+          test -f public/admin/repository.php
+          test -f public/admin/server.php
+          test -f public/admin/style.css
 
-          echo "Using website ZIP:"
-          echo "$ZIP"
-
-          rm -rf extracted-site
-          mkdir -p extracted-site
-
-          unzip -q "$ZIP" -d extracted-site
+          test -f public/.htaccess
 
           echo
+          echo "Project structure: OK"
+
+      # =====================================================
+      # 5. PHP lint
+      # =====================================================
+      - name: Lint all PHP files
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
           echo "======================================"
-          echo "Searching for index.html"
+          echo "PHP Lint"
           echo "======================================"
 
-          INDEX_FILE=$(find extracted-site \
-            -type f \
-            -name "index.html" \
-            | head -n 1 || true)
+          FAILED=0
 
-          if [ -z "$INDEX_FILE" ]; then
-            echo "ERROR: index.html was not found inside ZIP."
+          while IFS= read -r -d '' file; do
 
             echo
-            echo "Extracted files:"
-            find extracted-site -maxdepth 5 -type f | sort
+            echo "Checking: $file"
 
+            if ! php -l "$file"; then
+              FAILED=1
+            fi
+
+          done < <(
+            find . \
+              -type f \
+              -name "*.php" \
+              -print0
+          )
+
+          if [ "$FAILED" -ne 0 ]; then
+            echo
+            echo "PHP lint failed."
             exit 1
           fi
 
-          SITE_DIR="$(dirname "$INDEX_FILE")"
-
-          echo "index.html found:"
-          echo "$INDEX_FILE"
-
           echo
-          echo "Website directory:"
-          echo "$SITE_DIR"
-
-          echo "SITE_DIR=$SITE_DIR" >> "$GITHUB_ENV"
+          echo "All PHP files are valid."
 
       # =====================================================
-      # 3. Verify website
+      # 6. Check required PHP extensions
       # =====================================================
-      - name: Verify website
+      - name: Check PHP extensions
         shell: bash
         run: |
           set -Eeuo pipefail
 
-          echo "======================================"
-          echo "Verifying TunnelCat website"
-          echo "======================================"
+          echo "Checking required extensions..."
 
-          test -d "$SITE_DIR"
-          test -f "$SITE_DIR/index.html"
+          php -r '
+          $required = [
+              "PDO",
+              "pdo_sqlite",
+              "sqlite3",
+              "openssl"
+          ];
 
-          echo "index.html: OK"
+          foreach ($required as $ext) {
+              if ($ext === "PDO") {
+                  if (!class_exists("PDO")) {
+                      fwrite(STDERR, "Missing PDO\n");
+                      exit(1);
+                  }
+              } elseif (!extension_loaded($ext)) {
+                  fwrite(STDERR, "Missing extension: $ext\n");
+                  exit(1);
+              }
 
-          if [ -f "$SITE_DIR/app.js" ]; then
-            echo "app.js: OK"
-          else
-            echo "app.js: not present"
+              echo "$ext: OK\n";
+          }
+          '
+
+      # =====================================================
+      # 7. Test configuration
+      # =====================================================
+      - name: Test application configuration
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          echo "Loading app/config.php..."
+
+          php -r '
+          require "app/config.php";
+
+          if (!defined("APP_NAME")) {
+              fwrite(STDERR, "APP_NAME missing\n");
+              exit(1);
+          }
+
+          if (!defined("DB_FILE")) {
+              fwrite(STDERR, "DB_FILE missing\n");
+              exit(1);
+          }
+
+          if (!defined("TUNNELCAT_AES_KEY_B64")) {
+              fwrite(STDERR, "TUNNELCAT_AES_KEY_B64 missing\n");
+              exit(1);
+          }
+
+          echo "APP_NAME: " . APP_NAME . PHP_EOL;
+          echo "DB_FILE: " . DB_FILE . PHP_EOL;
+          echo "Configuration loaded successfully." . PHP_EOL;
+          '
+
+      # =====================================================
+      # 8. Test SQLite database creation
+      # =====================================================
+      - name: Test SQLite database
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          echo "Testing SQLite database..."
+
+          rm -rf storage
+
+          php -r '
+          require "app/config.php";
+
+          $pdo = db();
+
+          if (!$pdo instanceof PDO) {
+              fwrite(STDERR, "Database connection failed\n");
+              exit(1);
+          }
+
+          $tables = $pdo->query(
+              "SELECT name FROM sqlite_master
+               WHERE type = '\''table'\''
+               ORDER BY name"
+          )->fetchAll(PDO::FETCH_COLUMN);
+
+          echo "SQLite tables:" . PHP_EOL;
+
+          foreach ($tables as $table) {
+              echo " - $table" . PHP_EOL;
+          }
+
+          if (!in_array("repositories", $tables, true)) {
+              fwrite(STDERR, "repositories table missing\n");
+              exit(1);
+          }
+
+          if (!in_array("servers", $tables, true)) {
+              fwrite(STDERR, "servers table missing\n");
+              exit(1);
+          }
+
+          echo "SQLite database test: OK" . PHP_EOL;
+          '
+
+      # =====================================================
+      # 9. Test repository functions
+      # =====================================================
+      - name: Test repository functions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          php -r '
+          require "app/config.php";
+
+          $repo = repository_by_username(DEFAULT_REPO_USERNAME);
+
+          if (!$repo) {
+              fwrite(STDERR, "Default repository not found\n");
+              exit(1);
+          }
+
+          echo "Default repository:" . PHP_EOL;
+          echo "Username: " . $repo["username"] . PHP_EOL;
+          echo "Title: " . $repo["title"] . PHP_EOL;
+          echo "Version: " . $repo["version"] . PHP_EOL;
+
+          $ports = parse_ports("53, 443 8080 invalid 0 65536");
+
+          echo PHP_EOL;
+          echo "Parsed ports:" . PHP_EOL;
+          print_r($ports);
+
+          if ($ports !== [53, 443, 8080]) {
+              fwrite(STDERR, "Port parser test failed\n");
+              exit(1);
+          }
+
+          $protocols = parse_protocols("F,G,A,F");
+
+          echo PHP_EOL;
+          echo "Parsed protocols:" . PHP_EOL;
+          print_r($protocols);
+
+          if ($protocols !== ["F", "G", "A"]) {
+              fwrite(STDERR, "Protocol parser test failed\n");
+              exit(1);
+          }
+
+          echo PHP_EOL;
+          echo "Repository functions: OK" . PHP_EOL;
+          '
+
+      # =====================================================
+      # 10. Test TunnelCat AES encryption
+      # =====================================================
+      - name: Test TunnelCat encryption
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          php -r '
+          require "app/config.php";
+
+          $key = base64_decode(
+              TUNNELCAT_AES_KEY_B64,
+              true
+          );
+
+          if ($key === false) {
+              fwrite(STDERR, "Invalid Base64 AES key\n");
+              exit(1);
+          }
+
+          if (strlen($key) !== 32) {
+              fwrite(
+                  STDERR,
+                  "AES key must be 32 bytes, got " .
+                  strlen($key) .
+                  PHP_EOL
+              );
+
+              exit(1);
+          }
+
+          $testJson = json_encode([
+              "server_data_version" => "1",
+              "release_timestamp" => time(),
+              "data_information" => "CI test",
+              "data_logo_image" => "",
+              "data_bottom_image" => "",
+              "ads_disabled" => false,
+              "servers" => []
+          ]);
+
+          if ($testJson === false) {
+              fwrite(STDERR, "JSON encoding failed\n");
+              exit(1);
+          }
+
+          $encrypted = encrypt_for_tunnelcat($testJson);
+
+          if ($encrypted === "") {
+              fwrite(STDERR, "Encryption returned empty data\n");
+              exit(1);
+          }
+
+          $decoded = base64_decode($encrypted, true);
+
+          if ($decoded === false) {
+              fwrite(STDERR, "Encrypted payload is not Base64\n");
+              exit(1);
+          }
+
+          echo "AES key length: " . strlen($key) . " bytes" . PHP_EOL;
+          echo "JSON length: " . strlen($testJson) . " bytes" . PHP_EOL;
+          echo "Encrypted length: " . strlen($decoded) . " bytes" . PHP_EOL;
+          echo "TunnelCat AES encryption: OK" . PHP_EOL;
+          '
+
+      # =====================================================
+      # 11. Test payload generation
+      # =====================================================
+      - name: Test TunnelCat repository payload
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          php -r '
+          require "app/config.php";
+
+          $repo = repository_by_username(DEFAULT_REPO_USERNAME);
+
+          $servers = db()
+              ->query(
+                  "SELECT * FROM servers
+                   WHERE repository_id = " .
+                  (int)$repo["id"] .
+                  " ORDER BY sort_order, id"
+              )
+              ->fetchAll(PDO::FETCH_ASSOC);
+
+          $payload = build_payload($repo, $servers);
+
+          if (!isset($payload["server_data_version"])) {
+              fwrite(STDERR, "Missing server_data_version\n");
+              exit(1);
+          }
+
+          if (!isset($payload["servers"])) {
+              fwrite(STDERR, "Missing servers\n");
+              exit(1);
+          }
+
+          $json = json_encode(
+              $payload,
+              JSON_UNESCAPED_SLASHES |
+              JSON_UNESCAPED_UNICODE
+          );
+
+          if ($json === false) {
+              fwrite(STDERR, "Payload JSON encoding failed\n");
+              exit(1);
+          }
+
+          echo "Payload generated successfully." . PHP_EOL;
+          echo "Servers: " . count($payload["servers"]) . PHP_EOL;
+          echo "JSON bytes: " . strlen($json) . PHP_EOL;
+
+          $encrypted = encrypted_payload($repo, $servers);
+
+          if ($encrypted === "") {
+              fwrite(STDERR, "Encrypted payload is empty\n");
+              exit(1);
+          }
+
+          echo "Encrypted repository payload generated." . PHP_EOL;
+          echo "Payload test: OK" . PHP_EOL;
+          '
+
+      # =====================================================
+      # 12. Test public endpoints
+      # =====================================================
+      - name: Start PHP server
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          php \
+            -S 127.0.0.1:8080 \
+            -t public \
+            > /tmp/tunnelcat-php.log 2>&1 &
+
+          echo $! > /tmp/tunnelcat-php.pid
+
+          for i in $(seq 1 20); do
+
+            if curl \
+              --silent \
+              --show-error \
+              --fail \
+              http://127.0.0.1:8080/ \
+              >/tmp/index-response.txt; then
+
+              echo "PHP server is ready."
+              break
+
+            fi
+
+            sleep 1
+
+          done
+
+          if ! kill -0 "$(cat /tmp/tunnelcat-php.pid)" 2>/dev/null; then
+            echo "PHP server failed to start."
+            cat /tmp/tunnelcat-php.log
+            exit 1
           fi
 
-          if [ -f "$SITE_DIR/style.css" ]; then
-            echo "style.css: OK"
-          else
-            echo "style.css: not present"
+      # =====================================================
+      # 13. Test public index
+      # =====================================================
+      - name: Test public index
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          echo "Testing /"
+
+          HEADERS="$(mktemp)"
+
+          curl \
+            --silent \
+            --show-error \
+            --dump-header "$HEADERS" \
+            --output /tmp/index.html \
+            http://127.0.0.1:8080/
+
+          echo
+          echo "Response headers:"
+          cat "$HEADERS"
+
+          echo
+          echo "Response:"
+          cat /tmp/index.html
+
+          grep -qi \
+            "Location: /admin/login.php" \
+            "$HEADERS"
+
+          echo
+          echo "Index endpoint: OK"
+
+      # =====================================================
+      # 14. Test repository endpoint
+      # =====================================================
+      - name: Test repository endpoint
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          echo "Testing repository endpoint..."
+
+          curl \
+            --silent \
+            --show-error \
+            --fail \
+            "http://127.0.0.1:8080/repo.php?username=official" \
+            > /tmp/repository-response.txt
+
+          echo "Repository response received."
+
+          if [ ! -s /tmp/repository-response.txt ]; then
+            echo "ERROR: Empty repository response."
+            exit 1
           fi
 
           echo
-          echo "Website files:"
-          find "$SITE_DIR" -maxdepth 2 -type f | sort
+          echo "Repository response size:"
+          wc -c /tmp/repository-response.txt
+
+          echo
+          echo "Repository endpoint: OK"
 
       # =====================================================
-      # 4. Setup GitHub Pages
+      # 15. Stop PHP server
       # =====================================================
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
-
-      # =====================================================
-      # 5. Upload website
-      # =====================================================
-      - name: Upload TunnelCat website
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: ${{ env.SITE_DIR }}
-
-      # =====================================================
-      # 6. Deploy
-      # =====================================================
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
-
-      # =====================================================
-      # 7. Show URL
-      # =====================================================
-      - name: Show deployment
+      - name: Stop PHP server
+        if: always()
         shell: bash
         run: |
-          echo "======================================"
-          echo "TunnelCat Panel deployed successfully"
-          echo "======================================"
-          echo "GitHub Pages URL:"
-          echo "${{ steps.deployment.outputs.page_url }}"
+          if [ -f /tmp/tunnelcat-php.pid ]; then
+            kill "$(cat /tmp/tunnelcat-php.pid)" 2>/dev/null || true
+          fi
+
+      # =====================================================
+      # 16. Final summary
+      # =====================================================
+      - name: Validation complete
+        shell: bash
+        run: |
+          echo "========================================"
+          echo "TunnelCat Repository Panel"
+          echo "VALIDATION SUCCESS"
+          echo "========================================"
