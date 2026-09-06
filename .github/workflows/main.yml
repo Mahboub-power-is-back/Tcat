@@ -24,72 +24,148 @@ jobs:
     steps:
 
       # =====================================================
-      # 1. Checkout
+      # 1. Checkout repository
       # =====================================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
       # =====================================================
-      # 2. Verify website
+      # 2. Find and extract website ZIP
+      # =====================================================
+      - name: Extract TunnelCat website
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          echo "======================================"
+          echo "Repository contents"
+          echo "======================================"
+
+          find . -maxdepth 3 -type f | sort
+
+          echo
+          echo "======================================"
+          echo "Finding website ZIP"
+          echo "======================================"
+
+          ZIP=""
+
+          if [ -f "TunnelCat-Website-Server-Panel-v1.zip" ]; then
+            ZIP="TunnelCat-Website-Server-Panel-v1.zip"
+          elif [ -f "TunnelCat-GitHub-Complete.zip" ]; then
+            ZIP="TunnelCat-GitHub-Complete.zip"
+          else
+            ZIP=$(find . -maxdepth 1 -type f \
+              \( -iname "*website*.zip" -o -iname "*panel*.zip" -o -iname "*github*.zip" \) \
+              | head -n 1 || true)
+          fi
+
+          if [ -z "$ZIP" ]; then
+            echo "ERROR: Website ZIP not found."
+            exit 1
+          fi
+
+          echo "Using website ZIP:"
+          echo "$ZIP"
+
+          rm -rf extracted-site
+          mkdir -p extracted-site
+
+          unzip -q "$ZIP" -d extracted-site
+
+          echo
+          echo "======================================"
+          echo "Searching for index.html"
+          echo "======================================"
+
+          INDEX_FILE=$(find extracted-site \
+            -type f \
+            -name "index.html" \
+            | head -n 1 || true)
+
+          if [ -z "$INDEX_FILE" ]; then
+            echo "ERROR: index.html was not found inside ZIP."
+
+            echo
+            echo "Extracted files:"
+            find extracted-site -maxdepth 5 -type f | sort
+
+            exit 1
+          fi
+
+          SITE_DIR="$(dirname "$INDEX_FILE")"
+
+          echo "index.html found:"
+          echo "$INDEX_FILE"
+
+          echo
+          echo "Website directory:"
+          echo "$SITE_DIR"
+
+          echo "SITE_DIR=$SITE_DIR" >> "$GITHUB_ENV"
+
+      # =====================================================
+      # 3. Verify website
       # =====================================================
       - name: Verify website
         shell: bash
         run: |
           set -Eeuo pipefail
 
-          echo "Repository:"
-          pwd
+          echo "======================================"
+          echo "Verifying TunnelCat website"
+          echo "======================================"
+
+          test -d "$SITE_DIR"
+          test -f "$SITE_DIR/index.html"
+
+          echo "index.html: OK"
+
+          if [ -f "$SITE_DIR/app.js" ]; then
+            echo "app.js: OK"
+          else
+            echo "app.js: not present"
+          fi
+
+          if [ -f "$SITE_DIR/style.css" ]; then
+            echo "style.css: OK"
+          else
+            echo "style.css: not present"
+          fi
 
           echo
-          echo "Files:"
-          find . -maxdepth 3 -type f | sort
-
-          echo
-          echo "Checking public directory..."
-
-          test -d public
-          test -f public/index.html
-          test -f public/app.js
-          test -f public/style.css
-
-          echo "Website files found."
-
-          echo
-          echo "Checking server data..."
-
-          test -f data/servers.json
-
-          echo "Server data found."
+          echo "Website files:"
+          find "$SITE_DIR" -maxdepth 2 -type f | sort
 
       # =====================================================
-      # 3. Prepare GitHub Pages
+      # 4. Setup GitHub Pages
       # =====================================================
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
       # =====================================================
-      # 4. Upload public directory
+      # 5. Upload website
       # =====================================================
       - name: Upload TunnelCat website
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./public
+          path: ${{ env.SITE_DIR }}
 
       # =====================================================
-      # 5. Deploy
+      # 6. Deploy
       # =====================================================
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
 
       # =====================================================
-      # 6. Show URL
+      # 7. Show URL
       # =====================================================
       - name: Show deployment
         shell: bash
         run: |
           echo "======================================"
-          echo "TunnelCat Panel deployed"
+          echo "TunnelCat Panel deployed successfully"
           echo "======================================"
-          echo "URL:"
+          echo "GitHub Pages URL:"
           echo "${{ steps.deployment.outputs.page_url }}"
