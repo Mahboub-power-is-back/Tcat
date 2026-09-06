@@ -1,11 +1,11 @@
 name: Deploy TunnelCat Panel
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
-
-  workflow_dispatch:
+      - master
 
 permissions:
   contents: read
@@ -13,7 +13,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: github-pages
+  group: pages
   cancel-in-progress: true
 
 jobs:
@@ -21,96 +21,75 @@ jobs:
     name: Deploy TunnelCat Panel
     runs-on: ubuntu-latest
 
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-
     steps:
 
-      # 1. Download repository
+      # =====================================================
+      # 1. Checkout
+      # =====================================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Configure GitHub Pages
-      - name: Configure GitHub Pages
-        uses: actions/configure-pages@v5
-
-      # 3. Prepare website
-      - name: Prepare website
+      # =====================================================
+      # 2. Verify website
+      # =====================================================
+      - name: Verify website
         shell: bash
         run: |
-          set -e
+          set -Eeuo pipefail
 
-          rm -rf _site
-          mkdir -p _site
+          echo "Repository:"
+          pwd
 
-          echo "Checking repository..."
+          echo
+          echo "Files:"
+          find . -maxdepth 3 -type f | sort
 
-          if [ -d "public" ]; then
-            echo "public/ directory found."
-            cp -R public/. _site/
-          else
-            echo "public/ directory not found."
-            echo "Checking repository root..."
+          echo
+          echo "Checking public directory..."
 
-            if [ -f "index.html" ]; then
-              cp index.html _site/
-            else
-              echo "ERROR: index.html was not found."
-              echo "Expected:"
-              echo "  public/index.html"
-              echo "or:"
-              echo "  index.html"
-              exit 1
-            fi
+          test -d public
+          test -f public/index.html
+          test -f public/app.js
+          test -f public/style.css
 
-            if [ -f "app.js" ]; then
-              cp app.js _site/
-            fi
+          echo "Website files found."
 
-            if [ -f "style.css" ]; then
-              cp style.css _site/
-            fi
+          echo
+          echo "Checking server data..."
 
-            if [ -d "assets" ]; then
-              cp -R assets _site/
-            fi
+          test -f data/servers.json
 
-            if [ -d "css" ]; then
-              cp -R css _site/
-            fi
+          echo "Server data found."
 
-            if [ -d "js" ]; then
-              cp -R js _site/
-            fi
+      # =====================================================
+      # 3. Prepare GitHub Pages
+      # =====================================================
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
 
-            if [ -d "images" ]; then
-              cp -R images _site/
-            fi
-          fi
-
-          echo ""
-          echo "Website files:"
-          find _site -maxdepth 5 -type f -print
-
-          echo ""
-          echo "Checking index.html..."
-
-          if [ ! -f "_site/index.html" ]; then
-            echo "ERROR: _site/index.html does not exist."
-            exit 1
-          fi
-
-          echo "index.html found."
-          echo "Website preparation completed."
-
-      # 4. Upload website
+      # =====================================================
+      # 4. Upload public directory
+      # =====================================================
       - name: Upload TunnelCat website
-        uses: actions/upload-pages-artifact@v4
+        uses: actions/upload-pages-artifact@v3
         with:
-          path: ./_site
+          path: ./public
 
+      # =====================================================
       # 5. Deploy
+      # =====================================================
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+      # =====================================================
+      # 6. Show URL
+      # =====================================================
+      - name: Show deployment
+        shell: bash
+        run: |
+          echo "======================================"
+          echo "TunnelCat Panel deployed"
+          echo "======================================"
+          echo "URL:"
+          echo "${{ steps.deployment.outputs.page_url }}"
