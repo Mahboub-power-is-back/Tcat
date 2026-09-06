@@ -1,4 +1,4 @@
-name: PHP Validation
+name: Deploy TunnelCat GitHub Pages
 
 on:
   push:
@@ -6,508 +6,192 @@ on:
       - main
       - master
 
-  pull_request:
-
   workflow_dispatch:
 
 permissions:
   contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
 
 jobs:
-  php:
-    name: PHP Validation
+  build:
+    name: Build GitHub Pages
     runs-on: ubuntu-22.04
-    timeout-minutes: 20
 
     steps:
-
       # =====================================================
-      # 1. Checkout repository
+      # CHECKOUT
       # =====================================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
       # =====================================================
-      # 2. Setup PHP
-      # =====================================================
-      - name: Setup PHP
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: '8.2'
-          extensions: sqlite3, pdo_sqlite, openssl
-          coverage: none
-
-      # =====================================================
-      # 3. Show repository
+      # SHOW FILES
       # =====================================================
       - name: Show repository
         shell: bash
         run: |
           set -Eeuo pipefail
 
-          echo "======================================"
-          echo "Repository"
-          echo "======================================"
-
+          echo "Repository:"
           pwd
 
           echo
-          find . -maxdepth 2 -type f | sort
+          find . -maxdepth 4 -type f | sort
 
       # =====================================================
-      # 4. Extract Repository Panel
+      # FIND GITHUB PAGES SOURCE
       # =====================================================
-      - name: Extract TunnelCat Repository Panel
+      - name: Prepare Pages source
         shell: bash
         run: |
           set -Eeuo pipefail
 
+          rm -rf _site
+          mkdir -p _site
+
+          # -------------------------------------------------
+          # Preferred GitHub Pages files
+          # -------------------------------------------------
+          if [ -f "index.html" ]; then
+            cp -R ./* _site/ 2>/dev/null || true
+          fi
+
+          # -------------------------------------------------
+          # If the complete Pages ZIP is in the repository,
+          # extract it.
+          # -------------------------------------------------
           ZIP=""
 
-          if [ -f "TunnelCat-Repository-Panel-GitHub.zip" ]; then
-            ZIP="TunnelCat-Repository-Panel-GitHub.zip"
+          if [ -f "TunnelCat-GitHub-Pages-Complete.zip" ]; then
+            ZIP="TunnelCat-GitHub-Pages-Complete.zip"
           fi
 
-          if [ -z "$ZIP" ]; then
-            ZIP=$(find . \
-              -maxdepth 2 \
+          if [ -n "$ZIP" ]; then
+
+            echo "Pages ZIP found:"
+            echo "$ZIP"
+
+            rm -rf /tmp/pages-source
+            mkdir -p /tmp/pages-source
+
+            unzip -q "$ZIP" -d /tmp/pages-source
+
+            # Find index.html inside the ZIP.
+            INDEX="$(find /tmp/pages-source \
               -type f \
-              -iname "*Repository*Panel*.zip" \
-              | head -n 1 || true)
-          fi
+              -name "index.html" \
+              | head -n 1 || true)"
 
-          if [ -z "$ZIP" ]; then
-            echo "ERROR: Repository Panel ZIP not found."
-
-            echo
-            echo "ZIP files:"
-            find . -type f -name "*.zip" -print
-
-            exit 1
-          fi
-
-          echo "Using:"
-          echo "$ZIP"
-
-          rm -rf panel-source
-          mkdir -p panel-source
-
-          unzip -q "$ZIP" -d panel-source
-
-          echo
-          echo "Extracted files:"
-          find panel-source -maxdepth 5 -type f | sort
-
-          # Find the directory containing app/config.php
-          PANEL_DIR=""
-
-          while IFS= read -r config; do
-
-            candidate="$(dirname "$(dirname "$config")")"
-
-            if [ -f "$candidate/app/config.php" ] && \
-               [ -f "$candidate/public/index.php" ]; then
-
-              PANEL_DIR="$candidate"
-              break
-
+            if [ -z "$INDEX" ]; then
+              echo "ERROR: index.html not found in Pages ZIP."
+              exit 1
             fi
 
-          done < <(
-            find panel-source \
-              -type f \
-              -path "*/app/config.php"
-          )
+            SOURCE_DIR="$(dirname "$INDEX")"
 
-          if [ -z "$PANEL_DIR" ]; then
-            echo
-            echo "ERROR: TunnelCat Repository Panel was not found."
+            echo "Pages source:"
+            echo "$SOURCE_DIR"
+
+            rm -rf _site/*
+            cp -R "$SOURCE_DIR"/. _site/
+
+          fi
+
+          # -------------------------------------------------
+          # Check final website
+          # -------------------------------------------------
+          if [ ! -f "_site/index.html" ]; then
+
+            echo "ERROR: _site/index.html does not exist."
 
             echo
-            echo "config.php files:"
-            find panel-source \
+            echo "Available HTML files:"
+            find . \
               -type f \
-              -name "config.php" \
+              -name "*.html" \
               -print
 
             exit 1
           fi
 
-          PANEL_DIR="$(cd "$PANEL_DIR" && pwd)"
-
           echo
           echo "======================================"
-          echo "Panel found"
+          echo "Pages source prepared"
           echo "======================================"
 
-          echo "$PANEL_DIR"
-
-          echo "PANEL_DIR=$PANEL_DIR" >> "$GITHUB_ENV"
+          find _site \
+            -maxdepth 5 \
+            -type f \
+            | sort
 
       # =====================================================
-      # 5. Verify panel structure
+      # DISABLE JEKYLL
       # =====================================================
-      - name: Verify project structure
+      - name: Disable Jekyll
         shell: bash
         run: |
           set -Eeuo pipefail
 
-          cd "$PANEL_DIR"
-
-          echo "======================================"
-          echo "TunnelCat Repository Panel"
-          echo "======================================"
-
-          pwd
-
-          echo
-          echo "Files:"
-          find . -maxdepth 4 -type f | sort
-
-          echo
-          echo "Checking required files..."
-
-          test -f app/config.php
-
-          test -f public/index.php
-          test -f public/repo.php
-
-          test -f public/admin/index.php
-          test -f public/admin/login.php
-          test -f public/admin/logout.php
-          test -f public/admin/repository.php
-          test -f public/admin/server.php
-          test -f public/admin/style.css
-
-          echo
-          echo "Project structure: OK"
+          touch _site/.nojekyll
 
       # =====================================================
-      # 6. PHP lint
+      # VERIFY WEBSITE
       # =====================================================
-      - name: Lint all PHP files
+      - name: Verify website
         shell: bash
         run: |
           set -Eeuo pipefail
 
-          cd "$PANEL_DIR"
+          test -f "_site/index.html"
 
-          FAILED=0
+          echo "index.html: OK"
 
-          echo "======================================"
-          echo "PHP Lint"
-          echo "======================================"
-
-          while IFS= read -r -d '' file; do
-
-            echo
-            echo "Checking:"
-            echo "$file"
-
-            if ! php -l "$file"; then
-              FAILED=1
-            fi
-
-          done < <(
-            find . \
-              -type f \
-              -name "*.php" \
-              -print0
-          )
-
-          if [ "$FAILED" -ne 0 ]; then
-            echo
-            echo "PHP lint failed."
-            exit 1
+          if [ -d "_site/admin" ]; then
+            echo "admin directory: OK"
+            find "_site/admin" -maxdepth 3 -type f | sort
           fi
 
-          echo
-          echo "All PHP files passed lint."
-
-      # =====================================================
-      # 7. Check PHP extensions
-      # =====================================================
-      - name: Check PHP extensions
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-
-          echo "======================================"
-          echo "PHP Extensions"
-          echo "======================================"
-
-          php -r '
-          $required = [
-              "PDO",
-              "pdo_sqlite",
-              "sqlite3",
-              "openssl"
-          ];
-
-          foreach ($required as $ext) {
-
-              if ($ext === "PDO") {
-
-                  if (!class_exists("PDO")) {
-                      fwrite(STDERR, "PDO is missing\n");
-                      exit(1);
-                  }
-
-              } elseif (!extension_loaded($ext)) {
-
-                  fwrite(
-                      STDERR,
-                      "Missing extension: $ext\n"
-                  );
-
-                  exit(1);
-              }
-
-              echo "$ext: OK\n";
-          }
-          '
-
-      # =====================================================
-      # 8. Test configuration
-      # =====================================================
-      - name: Test application configuration
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-
-          cd "$PANEL_DIR"
-
-          echo "Loading configuration..."
-
-          php -r '
-          require "app/config.php";
-
-          echo "config.php loaded successfully." . PHP_EOL;
-          '
-
-      # =====================================================
-      # 9. Test SQLite
-      # =====================================================
-      - name: Test SQLite database
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-
-          cd "$PANEL_DIR"
-
-          echo "======================================"
-          echo "SQLite Test"
-          echo "======================================"
-
-          php -r '
-          require "app/config.php";
-
-          $pdo = db();
-
-          if (!$pdo instanceof PDO) {
-              fwrite(
-                  STDERR,
-                  "Database connection failed\n"
-              );
-
-              exit(1);
-          }
-
-          echo "Database connection: OK" . PHP_EOL;
-
-          $tables = $pdo->query(
-              "SELECT name
-               FROM sqlite_master
-               WHERE type = '\''table'\''
-               ORDER BY name"
-          )->fetchAll(PDO::FETCH_COLUMN);
-
-          echo PHP_EOL;
-          echo "Tables:" . PHP_EOL;
-
-          foreach ($tables as $table) {
-              echo " - " . $table . PHP_EOL;
-          }
-
-          if (in_array("repositories", $tables, true)) {
-              echo "repositories table: OK" . PHP_EOL;
-          }
-
-          if (in_array("servers", $tables, true)) {
-              echo "servers table: OK" . PHP_EOL;
-          }
-
-          echo "SQLite test completed." . PHP_EOL;
-          '
-
-      # =====================================================
-      # 10. Test repository functions
-      # =====================================================
-      - name: Test repository functions
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-
-          cd "$PANEL_DIR"
-
-          php -r '
-          require "app/config.php";
-
-          echo "Testing repository functions..." . PHP_EOL;
-
-          if (function_exists("db")) {
-              echo "db(): OK" . PHP_EOL;
-          }
-
-          if (function_exists("repository_by_username")) {
-              echo "repository_by_username(): OK" . PHP_EOL;
-          }
-
-          if (function_exists("parse_ports")) {
-              echo "parse_ports(): OK" . PHP_EOL;
-          }
-
-          if (function_exists("parse_protocols")) {
-              echo "parse_protocols(): OK" . PHP_EOL;
-          }
-
-          echo "Repository functions loaded." . PHP_EOL;
-          '
-
-      # =====================================================
-      # 11. Start PHP web server
-      # =====================================================
-      - name: Start PHP server
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-
-          cd "$PANEL_DIR"
-
-          php \
-            -S 127.0.0.1:8080 \
-            -t public \
-            > /tmp/tunnelcat-php.log 2>&1 &
-
-          echo $! > /tmp/tunnelcat-php.pid
-
-          echo "Waiting for PHP server..."
-
-          READY=0
-
-          for i in $(seq 1 20); do
-
-            if curl \
-              --silent \
-              --show-error \
-              --fail \
-              http://127.0.0.1:8080/ \
-              >/tmp/tunnelcat-index.html; then
-
-              READY=1
-              break
-
-            fi
-
-            sleep 1
-
-          done
-
-          if [ "$READY" -ne 1 ]; then
-
-            echo "ERROR: PHP server did not start."
-
-            echo
-            echo "PHP server log:"
-            cat /tmp/tunnelcat-php.log
-
-            exit 1
+          if [ -d "_site/data" ]; then
+            echo "data directory: OK"
+            find "_site/data" -maxdepth 3 -type f | sort
           fi
 
-          echo "PHP server started successfully."
-
-      # =====================================================
-      # 12. Test main page
-      # =====================================================
-      - name: Test main page
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-
-          echo "Testing:"
-          echo "http://127.0.0.1:8080/"
-
-          curl \
-            --silent \
-            --show-error \
-            --fail \
-            -D /tmp/headers.txt \
-            -o /tmp/index.html \
-            http://127.0.0.1:8080/
-
-          echo
-          echo "Response headers:"
-          cat /tmp/headers.txt
-
-          echo
-          echo "Main page response:"
-          head -100 /tmp/index.html
-
-          echo
-          echo "Main page: OK"
-
-      # =====================================================
-      # 13. Test repository endpoint
-      # =====================================================
-      - name: Test repository endpoint
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-
-          echo "Testing repository endpoint..."
-
-          curl \
-            --silent \
-            --show-error \
-            --fail \
-            "http://127.0.0.1:8080/repo.php?username=official" \
-            -o /tmp/repository.json
-
-          if [ ! -s /tmp/repository.json ]; then
-            echo "ERROR: Repository response is empty."
-            exit 1
-          fi
-
-          echo
-          echo "Repository response size:"
-          wc -c /tmp/repository.json
-
-          echo
-          echo "Repository response:"
-          head -c 1000 /tmp/repository.json
-
-          echo
-          echo
-          echo "Repository endpoint: OK"
-
-      # =====================================================
-      # 14. Stop PHP server
-      # =====================================================
-      - name: Stop PHP server
-        if: always()
-        shell: bash
-        run: |
-          if [ -f /tmp/tunnelcat-php.pid ]; then
-            kill "$(cat /tmp/tunnelcat-php.pid)" 2>/dev/null || true
+          if [ -d "_site/repo" ]; then
+            echo "repo directory: OK"
+            find "_site/repo" -maxdepth 4 -type f | sort
           fi
 
       # =====================================================
-      # 15. Final result
+      # UPLOAD PAGES ARTIFACT
       # =====================================================
-      - name: Validation successful
-        shell: bash
-        run: |
-          echo "======================================"
-          echo "TunnelCat Repository Panel"
-          echo "VALIDATION SUCCESS"
-          echo "======================================"
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./_site
+
+  # =========================================================
+  # DEPLOY
+  # =========================================================
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+
+    runs-on: ubuntu-22.04
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
